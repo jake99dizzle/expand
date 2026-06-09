@@ -407,7 +407,7 @@ let lastTime = 0;
 let elapsed = 0;
 let gameOverTimer = 0;
 let gameOverPhase = 0;
-let collidedIdx = [-1, -1];
+let collidedIdx = [null, null];
 let dimAlpha = 0;
 
 // Circle pool
@@ -445,69 +445,74 @@ function getSpawnInterval() {
 
 let spawnTimer = 0;
 
-// Swipe tracking — each point gets its own timestamp
-let activePath = [];
-let touchStart = null;
-let touchCurrent = null;
-let trailPoints = []; // global pool of {x, y, age} — each fades 1s after drawn
+// Swipe tracking — per-finger isolated paths keyed by touch identifier
+const activePaths = new Map(); // touchId → array of {x, y}
+let trailPoints = []; // global pool of {x, y, age, touchId}
 
 canvas.addEventListener('touchstart', e => {
   if (state !== 'playing') return;
-  const t = e.changedTouches[0];
-  touchStart = { x: t.clientX, y: t.clientY };
-  touchCurrent = { x: t.clientX, y: t.clientY };
-  activePath = [{ x: t.clientX, y: t.clientY }];
-  trailPoints.push({ x: t.clientX, y: t.clientY, age: 0 });
+  for (const t of e.changedTouches) {
+    activePaths.set(t.identifier, [{ x: t.clientX, y: t.clientY }]);
+    trailPoints.push({ x: t.clientX, y: t.clientY, age: 0, touchId: t.identifier, type: 'dot' });
+  }
 }, { passive: true });
 
 canvas.addEventListener('touchmove', e => {
   if (state !== 'playing') return;
-  const t = e.changedTouches[0];
-  touchCurrent = { x: t.clientX, y: t.clientY };
-  activePath.push({ x: t.clientX, y: t.clientY });
-  trailPoints.push({ x: t.clientX, y: t.clientY, age: 0 });
-  checkSwipe(t.clientX, t.clientY);
+  for (const t of e.changedTouches) {
+    const path = activePaths.get(t.identifier);
+    if (!path) continue;
+    path.push({ x: t.clientX, y: t.clientY });
+    trailPoints.push({ x: t.clientX, y: t.clientY, age: 0, touchId: t.identifier, type: 'move' });
+    checkSwipeSegment(path, t.clientX, t.clientY);
+  }
 }, { passive: true });
 
 canvas.addEventListener('touchend', e => {
   if (state !== 'playing') return;
-  const t = e.changedTouches[0];
-  checkSwipe(t.clientX, t.clientY);
-  activePath = [];
-  touchStart = null;
-  touchCurrent = null;
+  for (const t of e.changedTouches) {
+    const path = activePaths.get(t.identifier);
+    if (path) {
+      checkSwipeSegment(path, t.clientX, t.clientY);
+      activePaths.delete(t.identifier);
+    }
+  }
+}, { passive: true });
+
+canvas.addEventListener('touchcancel', e => {
+  for (const t of e.changedTouches) activePaths.delete(t.identifier);
 }, { passive: true });
 
 // Mouse support for desktop testing
 let mouseDown = false;
-let mouseStart = null;
+let mousePath = [];
+const MOUSE_ID = 'mouse';
 canvas.addEventListener('mousedown', e => {
   if (state !== 'playing') return;
   mouseDown = true;
-  mouseStart = { x: e.clientX, y: e.clientY };
-  activePath = [{ x: e.clientX, y: e.clientY }];
-  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0 });
+  mousePath = [{ x: e.clientX, y: e.clientY }];
+  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0, touchId: MOUSE_ID, type: 'dot' });
 });
 canvas.addEventListener('mousemove', e => {
   if (!mouseDown || state !== 'playing') return;
-  activePath.push({ x: e.clientX, y: e.clientY });
-  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0 });
-  checkSwipe(e.clientX, e.clientY);
+  mousePath.push({ x: e.clientX, y: e.clientY });
+  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0, touchId: MOUSE_ID, type: 'move' });
+  checkSwipeSegment(mousePath, e.clientX, e.clientY);
 });
 canvas.addEventListener('mouseup', e => {
   if (state !== 'playing') return;
-  if (mouseStart) checkSwipe(e.clientX, e.clientY);
-  activePath = [];
+  checkSwipeSegment(mousePath, e.clientX, e.clientY);
+  mousePath = [];
   mouseDown = false;
-  mouseStart = null;
 });
 
-function checkSwipe(ex, ey) {
+function checkSwipeSegment(path, ex, ey) {
   if (state !== 'playing') return;
-  if (activePath.length < 2) return;
-  const prev = activePath[activePath.length - 2];
+  if (path.length < 2) return;
+  const prev = path[path.length - 2];
   const sx = prev.x, sy = prev.y;
-
+  const dist = Math.hypot(ex - sx, ey - sy);
+  if (dist < 4) return;
   for (let i = circles.length - 1; i >= 0; i--) {
     const c = circles[i];
     if (c.dead || c.cracking) continue;
@@ -552,7 +557,7 @@ function checkCollisions() {
       if (a.dead || b.dead || a.cracking || b.cracking) continue;
       const dist = Math.hypot(a.x - b.x, a.y - b.y);
       if (dist <= a.r + b.r) {
-        collidedIdx = [i, j];
+        collidedIdx = [a, b]; // store references not indices
         triggerGameOver();
         return;
       }
@@ -570,6 +575,9 @@ function triggerGameOver() {
   gameOverPhase = 0;
   gameOverTimer = 0;
   dimAlpha = 0;
+  trailPoints = [];
+  activePaths.clear();
+  mousePath = [];
 }
 
 function updateGameOver(dt) {
@@ -584,8 +592,8 @@ function updateGameOver(dt) {
   } else if (gameOverPhase === 1) {
     // Fill collided circles with white
     const t = Math.min(gameOverTimer / goFillTime, 1);
-    if (collidedIdx[0] >= 0) circles[collidedIdx[0]].fillAlpha = t;
-    if (collidedIdx[1] >= 0) circles[collidedIdx[1]].fillAlpha = t;
+    if (collidedIdx[0]) collidedIdx[0].fillAlpha = t;
+    if (collidedIdx[1]) collidedIdx[1].fillAlpha = t;
     if (t >= 1) {
       gameOverPhase = 2;
       gameOverTimer = 0;
@@ -601,6 +609,7 @@ function updateGameOver(dt) {
 }
 
 function showGameOver() {
+  if (state === 'gameover') return; // guard against double call
   state = 'gameover';
   document.getElementById('hud').style.display = 'none';
 
@@ -628,8 +637,9 @@ function startGame() {
   elapsed = 0;
   spawnTimer = 0;
   trailPoints = [];
-  activePath = [];
-  collidedIdx = [-1, -1];
+  activePaths.clear();
+  mousePath = [];
+  collidedIdx = [null, null];
   dimAlpha = 0;
   gameOverPhase = 0;
   gameOverTimer = 0;
@@ -659,7 +669,7 @@ function togglePause() {
 
 function endGameFromPause() {
   document.getElementById('pause-screen').classList.remove('visible');
-  collidedIdx = [-1, -1];
+  collidedIdx = [null, null];
   dimAlpha = 0;
   gameOverPhase = 2;
   gameOverTimer = 0;
@@ -679,7 +689,8 @@ function getAudio() {
 function playSlash() {
   try {
     const ctx2 = getAudio();
-    // Noise burst — crunch/slash feel
+    // Resume context if suspended (iOS Safari requires this)
+    if (ctx2.state === 'suspended') ctx2.resume();
     const bufSize = ctx2.sampleRate * 0.08;
     const buf = ctx2.createBuffer(1, bufSize, ctx2.sampleRate);
     const data = buf.getChannelData(0);
@@ -759,24 +770,33 @@ function draw() {
     ctx.fill();
   }
 
-  // Draw trail — connect consecutive points, each fading based on its own age
-  if (trailPoints.length > 1) {
-    for (let i = 1; i < trailPoints.length; i++) {
-      const p0 = trailPoints[i - 1];
-      const p1 = trailPoints[i];
-      const alpha = Math.max(0, 1 - p1.age * 2) * 0.55;
-      if (alpha <= 0) continue;
-      ctx.save();
-      ctx.globalAlpha = alpha;
-      ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.8;
-      ctx.lineCap = 'round';
+  // Draw trails — only connect points from the same finger, dot for taps
+  for (let i = 0; i < trailPoints.length; i++) {
+    const p1 = trailPoints[i];
+    const alpha = Math.max(0, 1 - p1.age * 2) * 0.55;
+    if (alpha <= 0) continue;
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.strokeStyle = '#fff';
+    ctx.fillStyle = '#fff';
+    ctx.lineWidth = 1.8;
+    ctx.lineCap = 'round';
+    if (p1.type === 'dot') {
+      // Single tap — draw a small dot
       ctx.beginPath();
-      ctx.moveTo(p0.x, p0.y);
-      ctx.lineTo(p1.x, p1.y);
-      ctx.stroke();
-      ctx.restore();
+      ctx.arc(p1.x, p1.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+    } else if (i > 0) {
+      const p0 = trailPoints[i - 1];
+      // Only draw line if same finger
+      if (p0.touchId === p1.touchId && p0.type !== 'dot') {
+        ctx.beginPath();
+        ctx.moveTo(p0.x, p0.y);
+        ctx.lineTo(p1.x, p1.y);
+        ctx.stroke();
+      }
     }
+    ctx.restore();
   }
 
   // Circles
