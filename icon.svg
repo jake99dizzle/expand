@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Background -->
+  <rect width="512" height="512" fill="#141414"/>
+
+  <!-- Smallest circle — innermost -->
+  <circle cx="256" cy="256" r="52" fill="none" stroke="rgba(220,220,220,0.9)" stroke-width="6"/>
+
+  <!-- Medium circle -->
+  <circle cx="256" cy="256" r="112" fill="none" stroke="rgba(210,210,210,0.65)" stroke-width="5"/>
+
+  <!-- Large circle -->
+  <circle cx="256" cy="256" r="174" fill="none" stroke="rgba(200,200,200,0.4)" stroke-width="4"/>
+
+  <!-- Outermost circle — nearly at edge, very faint -->
+  <circle cx="256" cy="256" r="228" fill="none" stroke="rgba(190,190,190,0.2)" stroke-width="3"/>
+</svg>
