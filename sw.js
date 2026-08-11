@@ -7,7 +7,8 @@ var PRECACHE = [
   './manifest.json',
   './icon-192.png',
   './icon-512.png',
-  './apple-touch-icon.png'
+  './apple-touch-icon.png',
+  './favicon-expand.png'
 ];
 
 self.addEventListener('install', function (event) {
