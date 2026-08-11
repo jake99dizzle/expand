@@ -6,7 +6,7 @@
 <title>EXPAND</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#141414">
-<link rel="icon" href="favicon.png?v=1" type="image/png">
+<link rel="icon" href="favicon-expand.png" type="image/png">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black">
@@ -397,8 +397,16 @@ function buildDotGrid() {
 
 let W, H;
 function resize() {
-  W = canvas.width = window.innerWidth;
-  H = canvas.height = window.innerHeight;
+  const dpr = window.devicePixelRatio || 1;
+  W = window.innerWidth;
+  H = window.innerHeight;
+  // Backing store at device resolution, CSS size at layout resolution
+  canvas.width = Math.round(W * dpr);
+  canvas.height = Math.round(H * dpr);
+  canvas.style.width = W + 'px';
+  canvas.style.height = H + 'px';
+  // Draw in CSS pixels; the transform handles the scale-up
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   buildDotGrid();
 }
 resize();
@@ -453,14 +461,14 @@ function getSpawnInterval() {
 let spawnTimer = 0;
 
 // Swipe tracking — per-finger isolated paths keyed by touch identifier
-const activePaths = new Map(); // touchId → array of {x, y}
-let trailPoints = []; // global pool of {x, y, age, touchId}
+const activePaths = new Map(); // touch identifier → array of {x, y}
+let trailPoints = []; // {x, y, age, type} — 'move' points also carry {px, py}
 
 canvas.addEventListener('touchstart', e => {
   if (state !== 'playing') return;
   for (const t of e.changedTouches) {
     activePaths.set(t.identifier, [{ x: t.clientX, y: t.clientY }]);
-    trailPoints.push({ x: t.clientX, y: t.clientY, age: 0, touchId: t.identifier, type: 'dot' });
+    trailPoints.push({ x: t.clientX, y: t.clientY, age: 0, type: 'dot' });
   }
 }, { passive: true });
 
@@ -469,8 +477,9 @@ canvas.addEventListener('touchmove', e => {
   for (const t of e.changedTouches) {
     const path = activePaths.get(t.identifier);
     if (!path) continue;
+    const prev = path[path.length - 1];
     path.push({ x: t.clientX, y: t.clientY });
-    trailPoints.push({ x: t.clientX, y: t.clientY, age: 0, touchId: t.identifier, type: 'move' });
+    trailPoints.push({ x: t.clientX, y: t.clientY, px: prev.x, py: prev.y, age: 0, type: 'move' });
     checkSwipeSegment(path, t.clientX, t.clientY);
   }
 }, { passive: true });
@@ -493,17 +502,17 @@ canvas.addEventListener('touchcancel', e => {
 // Mouse support for desktop testing
 let mouseDown = false;
 let mousePath = [];
-const MOUSE_ID = 'mouse';
 canvas.addEventListener('mousedown', e => {
   if (state !== 'playing') return;
   mouseDown = true;
   mousePath = [{ x: e.clientX, y: e.clientY }];
-  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0, touchId: MOUSE_ID, type: 'dot' });
+  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0, type: 'dot' });
 });
 canvas.addEventListener('mousemove', e => {
   if (!mouseDown || state !== 'playing') return;
+  const prev = mousePath[mousePath.length - 1];
   mousePath.push({ x: e.clientX, y: e.clientY });
-  trailPoints.push({ x: e.clientX, y: e.clientY, age: 0, touchId: MOUSE_ID, type: 'move' });
+  trailPoints.push({ x: e.clientX, y: e.clientY, px: prev.x, py: prev.y, age: 0, type: 'move' });
   checkSwipeSegment(mousePath, e.clientX, e.clientY);
 });
 canvas.addEventListener('mouseup', e => {
@@ -585,6 +594,8 @@ function triggerGameOver() {
   trailPoints = [];
   activePaths.clear();
   mousePath = [];
+  // Pause is dead during the death animation — stop it accepting taps
+  document.getElementById('pause-btn').style.pointerEvents = 'none';
 }
 
 function updateGameOver(dt) {
@@ -653,6 +664,7 @@ function startGame() {
 
   document.getElementById('score').textContent = '0';
   document.getElementById('hud').style.display = 'flex';
+  document.getElementById('pause-btn').style.pointerEvents = 'all';
 
   state = 'playing';
   lastTime = performance.now();
@@ -676,6 +688,7 @@ function togglePause() {
 
 function endGameFromPause() {
   document.getElementById('pause-screen').classList.remove('visible');
+  document.getElementById('pause-btn').style.pointerEvents = 'none';
   collidedIdx = [null, null];
   dimAlpha = 0;
   gameOverPhase = 2;
@@ -777,10 +790,11 @@ function draw() {
     ctx.fill();
   }
 
-  // Draw trails — only connect points from the same finger, dot for taps
+  // Draw trails — each move point carries its own previous point, so
+  // interleaved multi-finger points still render as continuous lines
   for (let i = 0; i < trailPoints.length; i++) {
-    const p1 = trailPoints[i];
-    const alpha = Math.max(0, 1 - p1.age * 2) * 0.55;
+    const p = trailPoints[i];
+    const alpha = Math.max(0, 1 - p.age * 2) * 0.55;
     if (alpha <= 0) continue;
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -788,20 +802,15 @@ function draw() {
     ctx.fillStyle = '#fff';
     ctx.lineWidth = 1.8;
     ctx.lineCap = 'round';
-    if (p1.type === 'dot') {
-      // Single tap — draw a small dot
+    if (p.type === 'dot') {
       ctx.beginPath();
-      ctx.arc(p1.x, p1.y, 2.5, 0, Math.PI * 2);
+      ctx.arc(p.x, p.y, 2.5, 0, Math.PI * 2);
       ctx.fill();
-    } else if (i > 0) {
-      const p0 = trailPoints[i - 1];
-      // Only draw line if same finger
-      if (p0.touchId === p1.touchId && p0.type !== 'dot') {
-        ctx.beginPath();
-        ctx.moveTo(p0.x, p0.y);
-        ctx.lineTo(p1.x, p1.y);
-        ctx.stroke();
-      }
+    } else {
+      ctx.beginPath();
+      ctx.moveTo(p.px, p.py);
+      ctx.lineTo(p.x, p.y);
+      ctx.stroke();
     }
     ctx.restore();
   }
