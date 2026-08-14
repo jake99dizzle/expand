@@ -1,3 +1,4 @@
+Copyright © 2026 jake99dizzle. All rights reserved.
 # expand
 A minimal mobile arcade game where you slash circles. 
 # EXPAND
